@@ -118,6 +118,9 @@ namespace {
 		{
 			SSH::ServerHostKey *key;
 			uint32_t max, min, n;
+			const BIGNUM *pr, *gr;
+			const BIGNUM *er, *fr;
+			BIGNUM *p, *g;
 			BIGNUM *e, *f;
 			Buffer server_public_key;
 			Buffer signature;
@@ -155,9 +158,15 @@ namespace {
 #ifdef USE_TEST_GROUP
 				group.append(test_prime_and_generator, sizeof test_prime_and_generator);
 				dh_ = DH_new();
-				SSH::MPInt::decode(&dh_->p, &group);
-				SSH::MPInt::decode(&dh_->g, &group);
-				ASSERT(log_, group.empty());
+
+				SSH::MPInt::decode(&p, &group);
+				SSH::MPInt::decode(&g, &group);
+#if OPENSSL_VERSION_NUMBER < 0x1010006fL
+				dh_->p = p;
+				dh_->g = g;
+#else
+				DH_set0_pqg(dh_, p, NULL, g);
+#endif				ASSERT(log_, group.empty());
 #else
 				DEBUG(log_) << "Doing DH_generate_parameters for " << n << " bits.";
 				ASSERT(log_, dh_ == NULL);
@@ -168,8 +177,20 @@ namespace {
 				}
 #endif
 
-				SSH::MPInt::encode(&group, dh_->p);
-				SSH::MPInt::encode(&group, dh_->g);
+#ifdef USE_TEST_GROUP
+				pr = p;
+				gr = g;
+#else
+#if OPENSSL_VERSION_NUMBER < 0x1010006fL
+				pr = dh_->p;
+				gr = dh_->p;
+#else
+				DH_get0_pqg(dh_, &pr, NULL, &gr);
+#endif
+#endif
+
+				SSH::MPInt::encode(&group, pr);
+				SSH::MPInt::encode(&group, gr);
 				key_exchange_.append(group);
 
 				packet.append(DiffieHellmanGroupExchangeGroup);
@@ -190,18 +211,29 @@ namespace {
 					return (false);
 				}
 
-				if (!SSH::MPInt::decode(&dh_->p, in))
+				if (!SSH::MPInt::decode(&p, in))
 					return (false);
-				if (!SSH::MPInt::decode(&dh_->g, in))
+				if (!SSH::MPInt::decode(&g, in)) {
+					BN_free(p);
 					return (false);
+				}
 
+#if OPENSSL_VERSION_NUMBER < 0x1010006fL
+				dh_->p = p;
+				dh_->g = g;
+#else
+				DH_set0_pqg(dh_, p, NULL, g);
+#endif
 				if (!DH_generate_key(dh_)) {
 					ERROR(log_) << "DH_generate_key failed.";
 					return (false);
 				}
-				e = dh_->pub_key;
-
-				SSH::MPInt::encode(&initialize, e);
+#if OPENSSL_VERSION_NUMBER < 0x1010006fL
+				er = dh_->pub_key;
+#else
+				DH_get0_key(dh_, &er, NULL);
+#endif
+				SSH::MPInt::encode(&initialize, er);
 				key_exchange_.append(initialize);
 
 				packet.append(DiffieHellmanGroupExchangeInitialize);
@@ -220,9 +252,12 @@ namespace {
 
 				if (!DH_generate_key(dh_))
 					return (false);
-				f = dh_->pub_key;
-
-				SSH::MPInt::encode(&key_exchange_, f);
+#if OPENSSL_VERSION_NUMBER < 0x1010006fL
+				fr = dh_->pub_key;
+#else
+				DH_get0_key(dh_, &fr, NULL);
+#endif
+				SSH::MPInt::encode(&key_exchange_, fr);
 				if (!exchange_finish(e)) {
 					ERROR(log_) << "Server key exchange finish failed.";
 					return (false);

@@ -25,6 +25,7 @@
 
 #include <openssl/aes.h>
 #include <openssl/evp.h>
+#include <openssl/modes.h>
 
 #include <common/factory.h>
 #include <crypto/crypto_encryption.h>
@@ -43,19 +44,19 @@ namespace {
 	class SessionEVP : public CryptoEncryption::Session {
 		LogHandle log_;
 		const EVP_CIPHER *cipher_;
-		EVP_CIPHER_CTX ctx_;
+		EVP_CIPHER_CTX *ctx_ = EVP_CIPHER_CTX_new();
 	public:
 		SessionEVP(const EVP_CIPHER *xcipher)
 		: log_("/crypto/encryption/session/openssl"),
 		  cipher_(xcipher),
 		  ctx_()
 		{
-			EVP_CIPHER_CTX_init(&ctx_);
+			ctx_ = EVP_CIPHER_CTX_new();
 		}
 
 		~SessionEVP()
 		{
-			EVP_CIPHER_CTX_cleanup(&ctx_);
+			EVP_CIPHER_CTX_cleanup(ctx_);
 		}
 
 		unsigned block_size(void) const
@@ -104,7 +105,7 @@ namespace {
 			uint8_t ivdata[iv->length()];
 			iv->copyout(ivdata, sizeof ivdata);
 
-			int rv = EVP_CipherInit(&ctx_, cipher_, keydata, ivdata, enc);
+			int rv = EVP_CipherInit(ctx_, cipher_, keydata, ivdata, enc);
 			if (rv == 0)
 				return (false);
 
@@ -124,7 +125,7 @@ namespace {
 			in->copyout(indata, sizeof indata);
 
 			uint8_t outdata[sizeof indata];
-			int rv = EVP_Cipher(&ctx_, outdata, indata, sizeof indata);
+			int rv = EVP_Cipher(ctx_, outdata, indata, sizeof indata);
 			if (rv == 0)
 				return (false);
 			out->append(outdata, sizeof outdata);
@@ -226,7 +227,7 @@ namespace {
 			in->copyout(indata, sizeof indata);
 
 			uint8_t outdata[sizeof indata];
-			AES_ctr128_encrypt(indata, outdata, sizeof indata, &key_, iv_, counterbuf, &countern);
+			CRYPTO_ctr128_encrypt(indata, outdata, sizeof indata, &key_, iv_, counterbuf, &countern, (block128_f)AES_encrypt);
 
 			out->append(outdata, sizeof outdata);
 			return (true);
